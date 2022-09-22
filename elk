@@ -1,0 +1,238 @@
+Deployment of ELK SIEM
+Last modified by Tejas Karambelkar on 2021/06/28 15:52
+ Edit
+ 
+ Create
+ 
+________________________________________
+KB for deployment of Elastic Security SolutionEdit
+Section A- Configuring Elastic Detection Engine into ELK stack (self-managed)
+Elastic Security combines SIEM threat detection features with endpoint prevention and response capabilities in one solution.
+To use this feature TLS must be configured between Kibana – Elasticsearch – Logstash -beats. Some security features are free under basic license starting from 7.1 and below are the steps to secure the Elastic Stack which begin with creating self-generated SSL certificates.
+1. Generate Certificate
+Step-1: Add host file entries (self-signed SSL certificates will be generated for this domain name)
+ 
+Step-2: creating HTTPS certificate for localhost domains-
+This focuses on generating the certificates using OpenSSL for loading local virtual hosts hosted on your computer. (Self-Signed certificates are Not recommended for production use). Put this all certificates in one of folder with required permissions to read for ELK.
+•	Certificate authority (CA)
+Generate RootCA.pem, RootCA.key & RootCA.crt using below command:
+openssl req -x509 -nodes -new -sha256 -days 1024 -newkey rsa:2048 -keyout RootCA.key -out RootCA.pem -subj "/C=US/CN=Example-Root-CA"
+openssl x509 -outform pem -in RootCA.pem -out RootCA.crt
+Note that Example-Root-CA is an example, you can customize the name.
+•	Domain name certificate
+Let's say you have three domains kibana.test.io, logstash.test.io and elasticsearch.test.io that are hosted on your local machine for development (using the hosts file to point them to 127.0.0.1).
+First, create a file domains.ext that lists all your local domains:
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = kibana.test.io
+DNS.2 = elasticsearch.test.io
+DNS.3 = logstash.test.io
+Generate localhost.key, localhost.csr, and localhost.crt using below command:
+openssl req -new -nodes -newkey rsa:2048 -keyout localhost.key -out localhost.csr -subj "/C=US/ST=YourState/L=YourCity/O=Example-Certificates/CN=localhost.local"
+openssl x509 -req -sha256 -days 1024 -in localhost.csr -CA RootCA.pem -CAkey RootCA.key -CAcreateserial -extfile domains.ext -out localhost.crt
+Note that the country / state / city / name in the first command can be customized.
+Now we can use these certificates to encrypt traffic between Kibana-Elasticsearch-Logstash-beats
+•	Trust the local CA (Only in Test Env.)
+At this point, the site would load with a warning about self-signed certificates. In order to get a green lock, your new local CA must be added to the trusted Root Certificate Authorities. (Adding trusted root is only recommended in test VM and not on corporate machines)
+Chrome, IE11 & Edge-
+Windows 10 recognizes .crt files, so you can right-click on RootCA.crt > Install to open the import dialog.
+Make sure to select "Trusted Root Certification Authorities" and confirm.
+You should now get a green lock in Chrome, IE11 and Edge.
+Firefox
+Import the certificate by going to about:preferences#privacy > Certificats > Import > RootCA.pem > Confirm for websites.
+2. Enable xpack security in Elasticsearch
+Configure xpack.security in elasticsearch.yml to encrypt the traffic.
+xpack.security.enabled: true
+xpack.security.http.ssl.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.http.ssl.key: /etc/elasticsearch/certs/certs/localhost.key
+xpack.security.http.ssl.certificate: /etc/elasticsearch/certs/certs/localhost.crt
+xpack.security.http.ssl.certificate_authorities: /etc/elasticsearch/certs/certs/RootCA.crt
+xpack.security.transport.ssl.key: /etc/elasticsearch/certs/certs/localhost.key
+xpack.security.transport.ssl.certificate: /etc/elasticsearch/certs/certs/localhost.crt
+xpack.security.transport.ssl.certificate_authorities: ["/etc/elasticsearch/certs/certs/RootCA.pem"]
+Note- Point certificates path based on your directory structure.
+3. Setup Users and check HTTPS connection for Elasticsearch node.
+Setup built-in password for reserved users, I will be using built in tool and you can skip this if you already have user’s created with required roles. (superuser)
+# bin/elasticsearch-setup-passwords auto -u "https://elasticsearch.test.io:9200"
+Restart Elasticsearch service and Access _cat/nodes API via HTTPS
+# curl --cacert /etc/elasticsearch/certs/certs/localhost.crt -u elastic 'https://elasticsearch.test.io:9200/_cat/nodes?v'
+ 
+TLS for Elasticsearch has been completed here now will move to:
+4. Enable TLS for Kibana
+Remember to use the password generated for the built-in user above. You need to replace <pwd> with the password that was defined. To avoid keeping cleartext password in config file, Hash them using this link
+Below is the config from kibana.yml file to enable TLS
+elasticsearch.hosts: ["https://elasticsearch.test.io:9200"]
+elasticsearch.username: "elastic"
+elasticsearch.password: "pwd"
+server.ssl.enabled: true
+server.ssl.certificate: /etc/kibana/certs/certs/localhost.crt
+server.ssl.key: /etc/kibana/certs/certs/localhost.key
+elasticsearch.ssl.certificateAuthorities: ["/etc/kibana/certs/certs/RootCA.pem"]
+Note- Point certificates path based on your directory structure.
+5. Encryption key in kibana.yml
+Set the xpack.security.encryptionKey property in the kibana.yml configuration file. You can use any text string that is 32 characters or longer as the encryption key. An arbitrary string of at least 32 characters that is used to encrypt sensitive properties of saved objects before they’re stored in Elasticsearch.
+xpack.encryptedSavedObjects.encryptionKey: fhjskloppd678ehkdfdlliverpoolfcr
+xpack.security.encryptionKey: cb312dc93c52b6b53d4fad9d34e31e86
+Alright! Now restart Kibana service and check HTTPS connection for Kibana if that works then login using ‘superuser’ for further configuration.
+ 
+6. Enable features from Kibana space
+In latest Kibana versions detection feature is preconfigured and in case you couldn’t find this on Kibana you can simply enable it from space.
+To enable Go to Kibana Settings>Stack Management>Kibana>Spaces
+Click on features and check the ‘Security’
+ 
+Update the changes and now you can see the Detection Tab Under Security on Kibana.
+7. Manage Detection Rules-
+In Security>Detection tab on Kibana you can see option ‘Manage Detection Rules’ from where you can import all pre-built rules which will import all pre-built rules which are available at GitHub.
+Alternatively, you can import json files through UI or you can use CLI tool to upload rules or to convert TOML files to JSON.
+These pre-built rules are designed by complying with Elastic Common Schema and The securitySolution:defaultIndex field defines which Elasticsearch indices the Elastic Security app uses to collects data. By default, these index patterns are used to match Elasticsearch indices:
+•	apm-*-transaction*
+•	auditbeat-*
+•	endgame-*
+•	filebeat-*
+•	logs-*
+•	packetbeat-*
+•	winlogbeat-*
+This page will allow bulk action as well e.g- Select all activate rules
+8. Create Detection Rule through UI
+Rules run periodically and search for source events, matches, sequences, or machine learning (ML is not Part of Basic License) job anomaly results that meet their criteria. When a rule’s criteria are met, a detection alert is created.
+You can create the following types of rules:
+•	Custom query: Query-based rule, which searches the defined indices and creates an alert when one or more documents match the rule’s query.
+•	Threshold: Searches the defined indices and creates a detections alert when the number of times the specified field’s value is present and meets the threshold during a single execution. When multiple values meet the threshold, an alert is generated for each value.
+For example, if the threshold field is source.ip and its value is 10, an alert is generated for every source IP address that appears in at least 10 of the rule’s search results.
+•	Event correlation: Searches the defined indices and creates an alert when results match an Event Query Language (EQL) query.
+•	Indicator match: Creates an alert when Elastic Security index field values match field values defined in the specified indicator index patterns.
+If you are creating a custom query, threshold, or event correlation rule, you can preview the rule beforehand to see what kind of results you can expect. See Preview your rule in this topic for more information.
+ 
+Creating a new rule requires the following steps:
+•	Select rule type and scope
+•	Preview your rule (optional)
+•	Configure basic rule settings
+•	Configure advanced rule settings (optional)
+•	Set the rule’s schedule
+•	Set up alert notifications (optional)
+Detailed information available here
+9. Enable TLS on Logstash (skip if no Logstash)
+In case you have Logstash configured then below changes require to enable TLS in logstash.yml
+xpack.monitoring.enabled: true
+xpack.monitoring.elasticsearch.username: logstash_system
+xpack.monitoring.elasticsearch.password: '<logstash_system_password>'
+xpack.monitoring.elasticsearch.hosts: [ 'https://<Elastic>:9200' ]
+xpack.monitoring.elasticsearch.ssl.certificate_authority: /etc/logstash/config/certs/ca.crt
+Then create and configure conf.d/example.conf
+input {
+beats {
+port => 5044
+ssl => true
+ssl_key => '/etc/logstash/config/certs/localhost.key'
+ssl_certificate => '/etc/logstash/config/certs/localhost.crt'
+}
+}
+output {
+elasticsearch {
+hosts => ["https://<elastic>:9200"]
+cacert => '/etc/logstash/config/certs/localhost.crt'
+user => 'logstash_writer'
+password => <logstash_writer_password>
+}
+}
+Start Logstash with the example configuration and check the Logstash log. We should see the following log messages:
+ 
+10. Enable TLS in beats
+In below example of winlogbeat we will require these changes in winlogbeat.yml In this example we are directly writing logs to Elasticsearch using winlogbeat module which are ECS compliant.
+setup.kibana:
+host: "https://kibana.test.io:5601"
+username: "elastic"
+password: "pwd"
+ssl.certificate_authorities: ["C:\\Program Files\\Winlogbeat\\RootCA.crt"]
+ssl.certificate: "C:\\Program Files\\Winlogbeat\\localhost.crt"
+ssl.key: "C:\\Program Files\\Winlogbeat\\localhost.key"
+
+output.elasticsearch:
+hosts: ["https://elasticsearch.test.io:9200/"]
+username: 'elastic'
+password: 'pwd'
+ssl.certificate_authorities: ["C:\\Program Files\\Winlogbeat\\RootCA.crt"]
+ssl.certificate: "C:\\Program Files\\Winlogbeat\\localhost.crt"
+ssl.key: "C:\\Program Files\\Winlogbeat\\localhost.key"
+This are the same certificate which we have generated in step 1 we need to copy this in host machine and point the correct path in config file of beats.
+If output is Logstash then it will require similar config changes.
+This was complete process to enable the Detection Engine on Kibana and any query from rule matches then it will generate an alert.
+ 
+==========================================================================================================================================================================================
+Section B- Configuring Elastic Detection Engine into ELK stack (Security Onion)
+If you directly landed up here, then please go through Section A steps for complete understanding as we’ll continue the same steps here.
+1. SO comes with TLS preconfigured by nginx- skip this step
+2. xpack.security already configured in default configuration of elasticsearch.yml skip this step
+ 
+3. Default config of Elasticsearch uses anonymous authentication and it has already TLS configured so will skip this step.
+Note- If you change the authentication type from default config it will impact all apps integration which are consuming Elasticsearch.
+4. TLS preconfigured for Kibana by nginx, will skip
+5. Encryption key in kibana.yml
+This need to be added in kibana.yml. To add custom config first we need to copy kibana.yml from /opt/so/saltstack/default/salt/kibana/etc to /opt/so/saltstack/local/salt/kibana/etc and make changes there.
+Note- Be aware that when we do these types of customizations, we may run into upgrade issues as newer Security Onion releases are made available, particularly when those new updates require changes to kibana.yml. After each upgrade we should compare our customized kibana.yml with the updated default kibana.yml and bring over any new changes required by SO into our customized file.
+xpack.encryptedSavedObjects.encryptionKey: fhjskloppd678ehkdfdlliverpoolfcr
+xpack.security.encryptionKey: cb312dc93c52b6b53d4fad9d34e31e86
+6. Enable features from Kibana space
+Now open Kibana from SOC and enable Security feature from Kibana space
+To enable Go to Kibana Settings>Stack Management>Kibana>Spaces
+Click on features and check the ‘Security’
+ 
+Update the changes and now you can see the Detection Tab Under Security on Kibana.
+7. Manage Detection Rules-
+Before proceeding to further changes in Detection Engine one thing to note here is, in default configuration of SO Kibana uses the Anonymous User from Elasticsearch. Which you can confirm by checking the config in default elasticsearch.yml
+ 
+and kibana.yml
+ 
+The elasticsearch_anonymous_user is a special constant that indicates you want to use the Elasticsearch anonymous user.
+Such authentication is expected limitation when we want to use Elastic Security APIs to interface with Elastic Security features.
+•	Detections API: Manage detection rules and alerts
+•	Exceptions API: Create and manage rule exceptions
+•	Lists API: Create source event value lists for use with rule exceptions
+•	Timeline API: Import and export timelines
+•	Cases API: Open and manage cases
+So, when we have Anonymous authentication configured, API calls will give us the missing Authorization header error-
+ 
+Because API authentication is Token-based authentication, using the same username and password used to log in to the Kibana UI, is required to access the APIs. And if we do not have password for default Anonymous user Kibana will fail to generate Authorization header which is base64 encoding of credentials.
+To mitigate this error, we need to create user through Kibana UI with manage_api_key privileges.
+Go to Stack Management> Security> Users and create user with superuser privileges and note down username and password.
+Now open the kibana.yml from /opt/so/saltstack/local/salt/kibana/etc (the same file where we made changes in step 5) and add below config.
+xpack.security.authc.providers:
+anonymous.anonymous1:
+ order: 0
+ credentials:
+  username: "test"
+  password: "test@123"
+Here elasticsearch_anonymous_user is replaced with username and password of user which we have created earlier from UI and cleartext passwords can be hashed using Secure Settings
+Restart the Kibana and continue with newly created user (Security Onions single sign-on will not break here).
+Now we can import prebuilt rules and create new rules from Detection UI. The Prebuilt rules will not work in Security Onion as they follow the Elasticsearch default indexes (which we have discussed in Section A Point 7) and Security Onion do not have those indexes in placed.
+8. Create Detection Rule through UI
+Creating custom rule is similar process here what we discussed earlier but the key points to note here are:
+•	SO do not have default Elasticsearch Indexes so make sure to use correct index.
+•	ECS fields name will not work here as SO do not comply with ECS, make sure to use correct fields in custom rules.
+In below example we can compare these changes: -
+•	EQL result from standalone ELK: -
+GET /winlogbeat-*/_eql/search
+{
+"query": """iam where event.action in ("audit-log-cleared", "Log clear")
+"""
+}
+ 
+•	EQL result from Security Onion ELK: -
+GET /so-*/_eql/search
+{
+"query": """host where event.action:("Log clear")"""
+}
+ 
+9. TLS on Logstash is preconfigured – skip
+10. Enable TLS on beats using SO’s certificates (Mandatory in production, Optional in Test environment)
+Beats.yml from test PC-
+output.logstash:
+hosts: ["LogstashIP:5044"]
+ssl.certificate_authorities: ["/path/ca.pem"]
+ssl.certificate: "/path/cert.pem"
+ssl.key: "/path/cert.key"
+
